@@ -400,6 +400,9 @@ class Benchmark:
                 error=str(exc),
             )
 
+    def measure_one(self, test_id: str) -> tuple[float, str, str]:
+        return self._dispatch(test_id)
+
     def _dispatch(self, test_id: str) -> tuple[float, str, str]:
         if test_id == "integer":
             return self._cpu_integer()

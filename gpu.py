@@ -1060,6 +1060,34 @@ class CudaSession:
         rate, _elapsed = self._scaled(launch, 64, lookups, target, "random access")
         return rate / 1e6
 
+    def cycle(self, stop: threading.Event, seconds: float, quick: bool, on_result) -> None:
+        """Run every GPU test in order until stop is set, reporting each measured rate."""
+        steps = (
+            ("gpu_fp32", "FP32 compute", "GFLOPS", lambda: self.fp32_gflops(seconds)),
+            ("gpu_fp16", "FP16 compute", "GFLOPS", lambda: self.fp16_gflops(seconds)),
+            ("gpu_fp64", "FP64 compute", "GFLOPS", lambda: self.fp64_gflops(seconds)),
+            ("gpu_sfu", "Special functions", "Gops/s", lambda: self.sfu_gops(seconds)),
+            ("gpu_int", "Integer compute", "Gops/s", lambda: self.integer_gops(seconds)),
+            ("gpu_int64", "64-bit integer", "Gops/s", lambda: self.int64_gops(seconds)),
+            ("gpu_bit", "Bitwise", "Gops/s", lambda: self.bit_gops(seconds)),
+            ("gpu_bw", "Global copy", "GB/s", lambda: self.bandwidth_gbs(seconds, quick)),
+            ("gpu_read", "Global read", "GB/s", lambda: self.read_gbs(seconds, quick)),
+            ("gpu_write", "Global write", "GB/s", lambda: self.write_gbs(seconds, quick)),
+            ("gpu_l2", "L2 cache", "GB/s", lambda: self.l2_gbs(seconds)),
+            ("gpu_shared", "Shared memory", "GB/s", lambda: self.shared_gbs(seconds)),
+            ("gpu_stride", "Random access", "Mlookups/s", lambda: self.stride_mlookups(seconds, quick)),
+        )
+        while not stop.is_set():
+            for test_id, name, unit, run in steps:
+                if stop.is_set():
+                    return
+                try:
+                    value = run()
+                except Exception as exc:
+                    on_result(test_id, name, None, unit, str(exc))
+                    continue
+                on_result(test_id, name, value, unit, None)
+
     def stress(self, stop: threading.Event, percent: int = 100) -> None:
         """Keep the GPU at the requested load until stop is set. Each launch stays under the display timeout."""
         sink = self._alloc(self.threads * 4)

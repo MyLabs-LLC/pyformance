@@ -32,7 +32,7 @@ Each test prints its result and score as soon as it finishes. The suite score pr
 
 ## Stress
 
-Hold a load until Ctrl+C. The status line shows the measured CPU and GPU use.
+Hold a load until Ctrl+C. Stress cycles every CPU test and every GPU test and prints each measured result and score. Every five seconds it also prints how busy the devices are and how much compute they are using.
 
 ```text
 python benchmark.py --stress
@@ -204,30 +204,21 @@ Stop sets an `Event`. The runner finishes the test it is in, then exits the plan
 
 ### Stress
 
-`--stress` does not build a `Benchmark`. `stress.run_stress` starts the requested devices and blocks until Ctrl+C.
+`--stress` does not run the normal report. `stress.run_stress` starts a CPU thread and a GPU thread, then blocks until Ctrl+C. Each thread walks its suite in order, measures one test with the same code the benchmark uses, prints the rate and score, and then starts the next test. When the list ends, it starts over.
 
 ```mermaid
 flowchart TD
-    flag["--stress 50"] --> cpu{"CPU requested?"}
+    flag["--stress"] --> cpu{"CPU requested?"}
     flag --> gpu{"GPU requested?"}
-    cpu -->|yes| cores["Start about percent% of the logical processors"]
-    cores --> burn["Each process loops integer_kernel"]
-    gpu -->|yes| thread["Thread: CudaSession.stress"]
-    thread --> full{"100%?"}
-    full -->|yes| long["Repeat ~0.25 s FP32 launches"]
-    full -->|no| duty["~10 ms of FP32, then sleep the rest of the duty cycle"]
-    burn --> tick["Every 5 s: CPU from GetSystemTimes, GPU from NVML"]
-    long --> tick
-    duty --> tick
-    tick --> trim{"CPU more than 4 points off after 10 s?"}
-    trim -->|high| pause["Suspend some worker processes"]
-    trim -->|low| resume["Resume suspended workers"]
-    pause --> tick
-    resume --> tick
+    cpu -->|yes| cpuLoop["Cycle integer, float, primes, sort, SHA-256, compress, physics, single"]
+    gpu -->|yes| gpuLoop["Cycle every GPU kernel in suite order"]
+    cpuLoop --> printed["Print the measured rate and score"]
+    gpuLoop --> printed
+    printed --> tick["Every 5 s: CPU percent and GHz, GPU percent and TFLOPS"]
+    tick --> cpuLoop
+    tick --> gpuLoop
 ```
 
-A partial CPU load pegs whole logical processors instead of pausing inside every worker. Pausing inside all 32 workers ran hot, because the sleeps did not line up with the scheduler. For 50% of 32 threads, 16 processes run the integer kernel with no sleep. Any fractional core left over is one extra process that works and sleeps. After 10 seconds, if the machine is still more than about 4 points away from the request, workers are suspended or resumed with `NtSuspendProcess` / `NtResumeProcess`. The printed CPU number is the whole system, so other programs count.
+A percent below 100 runs the CPU tests on that fraction of the logical processors, so a 50% request uses half of the threads. The printed CPU GHz is the combined clock of every logical processor, scaled by how busy they are. The GPU tests run at full speed so each line is that kernel's measured throughput. The TFLOPS figure on the five-second line is cores × 2 for each fused multiply-add × the SM clock × utilization.
 
-GPU stress at 100% keeps launching the FP32 kernel in chunks of about 0.25 s. A lower percent uses short slices and sleeps so the GPU-busy fraction matches the request. The status line averages NVML samples across those 5 seconds. NVML's own sample is short, and one instant reading would bounce between 0% and a spike.
-
-Ctrl+C sets the stop event, asks the GPU thread to return, and terminates the CPU processes. If the GPU session fails during a both-device run, the error is printed and the CPU workers keep going. A GPU-only failure exits.
+Ctrl+C sets the stop event and waits for the current test on each device to finish. If the GPU session fails during a both-device run, the error is printed and the CPU tests keep going. A GPU-only failure exits.
